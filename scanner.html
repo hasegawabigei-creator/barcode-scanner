@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- saved from url=(0046)file:///C:/Users/DELL/Downloads/scanner_2.html -->
-<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-
+<html>
+<head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>バーコードスキャン</title>
-<script src="./scanner_files/index.min.js.ダウンロード"></script>
+<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:-apple-system,sans-serif; overflow:hidden; }
@@ -26,14 +26,14 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <button id="close-btn" onclick="closeScanner()">×</button>
 </div>
 <div id="viewfinder">
-  <video id="video" playsinline="" autoplay="" muted=""></video>
+  <video id="video" playsinline autoplay muted></video>
   <div id="overlay">
     <div id="guide">
       <div id="guide-text">この枠内にバーコードを入れてください</div>
     </div>
   </div>
 </div>
-<div id="status">枠内にバーコードを入れてください（自動読み取り）</div>
+<div id="status">カメラを起動中...</div>
 <div id="result-bar"></div>
 
 <script>
@@ -87,7 +87,6 @@ function startScanner() {
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         var vw = video.videoWidth;
         var vh = video.videoHeight;
-        // ガイド枠（幅80%・高さ28%・中央）の範囲だけ解析
         var cx = Math.floor(vw * 0.10);
         var cy = Math.floor(vh * 0.36);
         var cw = Math.floor(vw * 0.80);
@@ -99,13 +98,11 @@ function startScanner() {
           var lum    = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
           var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
           var result = reader.decode(bitmap);
-          // 読み取り成功
           scanning = false;
           var text = result.getText();
           resultEl.textContent = '✓ 読み取り完了: ' + text;
           resultEl.style.display = 'block';
           statusEl.textContent   = 'ウィンドウが自動で閉じます...';
-          // 親ウィンドウに値を送信
           if (window.opener) {
             window.opener.postMessage({ type: 'BARCODE_RESULT', value: text }, '*');
           }
@@ -128,7 +125,6 @@ function startScanner() {
 }
 
 window.addEventListener('load', function() {
-  // ZXingロード待ち
   var tries = 0;
   function waitZXing() {
     if (typeof ZXing !== 'undefined') {
@@ -142,6 +138,5 @@ window.addEventListener('load', function() {
   waitZXing();
 });
 </script>
-
-
-</body></html>
+</body>
+</html>
