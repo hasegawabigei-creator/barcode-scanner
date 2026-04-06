@@ -78,6 +78,17 @@ function startScanner() {
 
     var zHints = new Map();
     zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    zHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+     ZXing.BarcodeFormat.CODABAR,
+     ZXing.BarcodeFormat.CODE_128,
+     ZXing.BarcodeFormat.CODE_39,
+     ZXing.BarcodeFormat.EAN_13,
+     ZXing.BarcodeFormat.EAN_8,
+     ZXing.BarcodeFormat.QR_CODE,
+     ZXing.BarcodeFormat.DATA_MATRIX,
+     ZXing.BarcodeFormat.ITF,
+     ZXing.BarcodeFormat.PDF_417
+    ]);
     var reader = new ZXing.MultiFormatReader();
     reader.setHints(zHints);
 
