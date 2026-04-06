@@ -14,7 +14,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 #viewfinder { position:relative; flex:1; overflow:hidden; }
 #video { width:100%; height:100%; object-fit:cover; display:block; }
 #overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
-#guide { width:80%; height:28%; border:2px solid #FFD600; border-radius:6px; box-shadow:0 0 0 2000px rgba(0,0,0,.5); position:relative; }
+#guide { width:90%; height:20%; border:2px solid #FFD600; border-radius:6px; box-shadow:0 0 0 2000px rgba(0,0,0,.5); position:relative; }
 #guide-text { position:absolute; top:-28px; left:0; right:0; text-align:center; color:#FFD600; font-size:12px; font-weight:500; white-space:nowrap; }
 #status { background:#111; color:#aaa; text-align:center; padding:14px 16px; font-size:13px; flex-shrink:0; line-height:1.6; }
 #result-bar { display:none; background:#1a7a1a; color:#fff; text-align:center; padding:16px; font-size:14px; flex-shrink:0; }
@@ -29,7 +29,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <video id="video" playsinline autoplay muted></video>
   <div id="overlay">
     <div id="guide">
-      <div id="guide-text">この枠内にバーコードを入れてください</div>
+      <div id="guide-text">バーコードを枠いっぱいに入れてください</div>
     </div>
   </div>
 </div>
@@ -82,14 +82,14 @@ function startScanner() {
   }
 
   navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
   })
   .then(function(s) {
     stream = s;
     var video = document.getElementById('video');
     video.srcObject = stream;
     video.play();
-    statusEl.textContent = '枠内にバーコードを入れてください（自動読み取り）';
+    statusEl.textContent = 'バーコードを枠いっぱいに入れてください（自動読み取り）';
     scanning = true;
 
     var zHints = new Map();
@@ -119,37 +119,43 @@ function startScanner() {
       return reader.decode(bitmap);
     }
 
+    function toGray(ctx, w, h) {
+      var imgData = ctx.getImageData(0, 0, w, h);
+      for (var i = 0; i < imgData.data.length; i += 4) {
+        var g = Math.round(0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
+        imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = g;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
     function scanLoop() {
       if (!scanning) return;
       var video = document.getElementById('video');
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         var vw = video.videoWidth;
         var vh = video.videoHeight;
-        var cx = Math.floor(vw * 0.10);
-        var cy = Math.floor(vh * 0.36);
-        var cw = Math.floor(vw * 0.80);
-        var ch = Math.floor(vh * 0.28);
-        canvas.width  = cw;
-        canvas.height = ch;
         var ctx = canvas.getContext('2d');
+
+        // ① 枠内（幅90%・高さ20%・中央）
+        var cx = Math.floor(vw * 0.05);
+        var cy = Math.floor(vh * 0.40);
+        var cw = Math.floor(vw * 0.90);
+        var ch = Math.floor(vh * 0.20);
+        canvas.width = cw; canvas.height = ch;
         ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-
-        // カラーで試行
         try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
 
-        // グレースケールで試行
-        var imgData = ctx.getImageData(0, 0, cw, ch);
-        for (var i = 0; i < imgData.data.length; i += 4) {
-          var g = Math.round(0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
-          imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = g;
-        }
-        ctx.putImageData(imgData, 0, 0);
+        // ② グレースケール
+        toGray(ctx, cw, ch);
         try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
 
-        // 全体も試行
-        canvas.width  = vw;
-        canvas.height = vh;
+        // ③ 全体カラー
+        canvas.width = vw; canvas.height = vh;
         ctx.drawImage(video, 0, 0, vw, vh);
+        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
+
+        // ④ 全体グレースケール
+        toGray(ctx, vw, vh);
         try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
       }
       animFrame = requestAnimationFrame(scanLoop);
