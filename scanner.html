@@ -64,8 +64,8 @@ function startScanner() {
   navigator.mediaDevices.getUserMedia({
     video: {
       facingMode: { ideal: 'environment' },
-      width:  { ideal: 1280 },
-      height: { ideal: 720 }
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 }
     }
   })
   .then(function(s) {
@@ -78,19 +78,52 @@ function startScanner() {
 
     var zHints = new Map();
     zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    zHints.set(ZXing.DecodeHintType.RETURN_CODABAR_START_END, true);
     zHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-     ZXing.BarcodeFormat.CODABAR,
-     ZXing.BarcodeFormat.CODE_128,
-     ZXing.BarcodeFormat.CODE_39,
-     ZXing.BarcodeFormat.EAN_13,
-     ZXing.BarcodeFormat.EAN_8,
-     ZXing.BarcodeFormat.QR_CODE,
-     ZXing.BarcodeFormat.DATA_MATRIX,
-     ZXing.BarcodeFormat.ITF,
-     ZXing.BarcodeFormat.PDF_417
+      ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.PDF_417,
+      ZXing.BarcodeFormat.AZTEC
     ]);
     var reader = new ZXing.MultiFormatReader();
     reader.setHints(zHints);
+
+    function tryDecode(canvas) {
+      var lum    = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+      var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+      return reader.decode(bitmap);
+    }
+
+    function onResult(text) {
+      scanning = false;
+
+      // Codabarの場合：先頭1文字・末尾2文字（チェックディジット+ストップ）を除去
+      var cleaned = text;
+      var first = text.charAt(0).toUpperCase();
+      var last  = text.charAt(text.length - 1).toUpperCase();
+      if ((first === 'A' || first === 'B' || first === 'C' || first === 'D') &&
+          (last  === 'A' || last  === 'B' || last  === 'C' || last  === 'D') &&
+          text.length > 3) {
+        cleaned = text.slice(1, text.length - 2);
+      }
+
+      resultEl.textContent = '✓ 読み取り完了: ' + cleaned;
+      resultEl.style.display = 'block';
+      statusEl.textContent   = 'ウィンドウが自動で閉じます...';
+      if (window.opener) {
+        window.opener.postMessage({ type: 'BARCODE_RESULT', value: cleaned }, '*');
+      }
+      setTimeout(function() { closeScanner(); }, 1500);
+    }
 
     function scanLoop() {
       if (!scanning) return;
@@ -104,20 +137,26 @@ function startScanner() {
         var ch = Math.floor(vh * 0.28);
         canvas.width  = cw;
         canvas.height = ch;
-        canvas.getContext('2d').drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+
         try {
-          var lum    = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
-          var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
-          var result = reader.decode(bitmap);
-          scanning = false;
-          var text = result.getText();
-          resultEl.textContent = '✓ 読み取り完了: ' + text;
-          resultEl.style.display = 'block';
-          statusEl.textContent   = 'ウィンドウが自動で閉じます...';
-          if (window.opener) {
-            window.opener.postMessage({ type: 'BARCODE_RESULT', value: text }, '*');
-          }
-          setTimeout(function() { closeScanner(); }, 1500);
+          var result = tryDecode(canvas);
+          onResult(result.getText());
+          return;
+        } catch(e) {}
+
+        // グレースケール変換して再試行
+        var imgData = ctx.getImageData(0, 0, cw, ch);
+        for (var i = 0; i < imgData.data.length; i += 4) {
+          var g = Math.round(0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
+          imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = g;
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        try {
+          var result2 = tryDecode(canvas);
+          onResult(result2.getText());
           return;
         } catch(e) {}
       }
