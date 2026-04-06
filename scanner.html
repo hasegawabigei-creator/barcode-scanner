@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>バーコードスキャン</title>
-<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:-apple-system,sans-serif; overflow:hidden; }
@@ -12,9 +12,8 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 #header h1 { font-size:16px; font-weight:500; }
 #close-btn { background:rgba(255,255,255,.15); border:none; color:#fff; border-radius:50%; width:36px; height:36px; font-size:20px; cursor:pointer; }
 #viewfinder { position:relative; flex:1; overflow:hidden; }
-#viewfinder video { width:100%; height:100%; object-fit:cover; display:block; }
-#viewfinder canvas { position:absolute; top:0; left:0; }
-#overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
+#video { width:100%; height:100%; object-fit:cover; display:block; }
+#overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
 #guide { width:80%; height:28%; border:2px solid #FFD600; border-radius:6px; box-shadow:0 0 0 2000px rgba(0,0,0,.5); position:relative; }
 #guide-text { position:absolute; top:-28px; left:0; right:0; text-align:center; color:#FFD600; font-size:12px; font-weight:500; white-space:nowrap; }
 #status { background:#111; color:#aaa; text-align:center; padding:14px 16px; font-size:13px; flex-shrink:0; line-height:1.6; }
@@ -27,6 +26,7 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <button id="close-btn" onclick="closeScanner()">×</button>
 </div>
 <div id="viewfinder">
+  <video id="video" playsinline autoplay muted></video>
   <div id="overlay">
     <div id="guide">
       <div id="guide-text">この枠内にバーコードを入れてください</div>
@@ -37,15 +37,26 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 <div id="result-bar"></div>
 
 <script>
-var statusEl = document.getElementById('status');
-var resultEl = document.getElementById('result-bar');
+var stream    = null;
+var scanning  = false;
+var animFrame = null;
+var canvas    = document.createElement('canvas');
+var statusEl  = document.getElementById('status');
+var resultEl  = document.getElementById('result-bar');
 
 function closeScanner() {
-  try { Quagga.stop(); } catch(e) {}
+  stopCamera();
   window.close();
 }
 
+function stopCamera() {
+  scanning = false;
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+  if (stream)    { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+}
+
 function onResult(text) {
+  // Codabar：先頭1文字・末尾2文字を除去
   var cleaned = text;
   var first = text.charAt(0).toUpperCase();
   var last  = text.charAt(text.length - 1).toUpperCase();
@@ -54,8 +65,7 @@ function onResult(text) {
       text.length > 3) {
     cleaned = text.slice(1, text.length - 2);
   }
-
-  try { Quagga.stop(); } catch(e) {}
+  stopCamera();
   resultEl.textContent = '✓ 読み取り完了: ' + cleaned;
   resultEl.style.display = 'block';
   statusEl.textContent = 'ウィンドウが自動で閉じます...';
@@ -65,58 +75,107 @@ function onResult(text) {
   setTimeout(function() { closeScanner(); }, 1500);
 }
 
-window.addEventListener('load', function() {
-  Quagga.init({
-    inputStream: {
-      name: 'Live',
-      type: 'LiveStream',
-      target: document.getElementById('viewfinder'),
-      constraints: {
-        facingMode: 'environment',
-        width:  { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      area: {
-        top:    '36%',
-        right:  '10%',
-        bottom: '36%',
-        left:   '10%'
-      }
-    },
-    decoder: {
-      readers: [
-        'codabar_reader',
-        'code_128_reader',
-        'code_39_reader',
-        'code_93_reader',
-        'ean_reader',
-        'ean_8_reader',
-        'upc_reader',
-        'upc_e_reader',
-        'i2of5_reader'
-      ],
-      multiple: false
-    },
-    locate: true,
-    numOfWorkers: 2,
-    frequency: 10
-  }, function(err) {
-    if (err) {
-      statusEl.innerHTML = 'カメラエラー: ' + err + '<br>ブラウザの設定でカメラを許可してください';
-      return;
-    }
-    Quagga.start();
-    statusEl.textContent = '枠内にバーコードを入れてください（自動読み取り）';
-  });
+function startScanner() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusEl.textContent = 'このブラウザはカメラに対応していません';
+    return;
+  }
 
-  var results = {};
-  Quagga.onDetected(function(data) {
-    var code = data.codeResult.code;
-    results[code] = (results[code] || 0) + 1;
-    if (results[code] >= 3) {
-      onResult(code);
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+  })
+  .then(function(s) {
+    stream = s;
+    var video = document.getElementById('video');
+    video.srcObject = stream;
+    video.play();
+    statusEl.textContent = '枠内にバーコードを入れてください（自動読み取り）';
+    scanning = true;
+
+    var zHints = new Map();
+    zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    zHints.set(ZXing.DecodeHintType.RETURN_CODABAR_START_END, true);
+    zHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.PDF_417,
+      ZXing.BarcodeFormat.AZTEC
+    ]);
+    var reader = new ZXing.MultiFormatReader();
+    reader.setHints(zHints);
+
+    function tryDecode(c) {
+      var lum    = new ZXing.HTMLCanvasElementLuminanceSource(c);
+      var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+      return reader.decode(bitmap);
     }
+
+    function scanLoop() {
+      if (!scanning) return;
+      var video = document.getElementById('video');
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        var vw = video.videoWidth;
+        var vh = video.videoHeight;
+        var cx = Math.floor(vw * 0.10);
+        var cy = Math.floor(vh * 0.36);
+        var cw = Math.floor(vw * 0.80);
+        var ch = Math.floor(vh * 0.28);
+        canvas.width  = cw;
+        canvas.height = ch;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+
+        // カラーで試行
+        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
+
+        // グレースケールで試行
+        var imgData = ctx.getImageData(0, 0, cw, ch);
+        for (var i = 0; i < imgData.data.length; i += 4) {
+          var g = Math.round(0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
+          imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = g;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
+
+        // 全体も試行
+        canvas.width  = vw;
+        canvas.height = vh;
+        ctx.drawImage(video, 0, 0, vw, vh);
+        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
+      }
+      animFrame = requestAnimationFrame(scanLoop);
+    }
+
+    video.addEventListener('loadeddata', function() {
+      animFrame = requestAnimationFrame(scanLoop);
+    });
+  })
+  .catch(function(err) {
+    statusEl.innerHTML = 'カメラエラー: ' + err.name + '<br>ブラウザの設定でカメラを許可してください';
   });
+}
+
+window.addEventListener('load', function() {
+  var tries = 0;
+  function waitZXing() {
+    if (typeof ZXing !== 'undefined') {
+      startScanner();
+    } else if (tries++ < 20) {
+      setTimeout(waitZXing, 300);
+    } else {
+      statusEl.textContent = 'ライブラリの読み込みに失敗しました。再読み込みしてください';
+    }
+  }
+  waitZXing();
 });
 </script>
 </body>
