@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<!-- saved from url=(0046)file:///C:/Users/DELL/Downloads/scanner_2.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>バーコードスキャン</title>
+<script src="./scanner_files/index.min.js.ダウンロード"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:-apple-system,sans-serif; overflow:hidden; }
+#header { background:#111; color:#fff; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+#header h1 { font-size:16px; font-weight:500; }
+#close-btn { background:rgba(255,255,255,.15); border:none; color:#fff; border-radius:50%; width:36px; height:36px; font-size:20px; cursor:pointer; }
+#viewfinder { position:relative; flex:1; overflow:hidden; }
+#video { width:100%; height:100%; object-fit:cover; display:block; }
+#overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+#guide { width:80%; height:28%; border:2px solid #FFD600; border-radius:6px; box-shadow:0 0 0 2000px rgba(0,0,0,.5); position:relative; }
+#guide-text { position:absolute; top:-28px; left:0; right:0; text-align:center; color:#FFD600; font-size:12px; font-weight:500; white-space:nowrap; }
+#status { background:#111; color:#aaa; text-align:center; padding:14px 16px; font-size:13px; flex-shrink:0; line-height:1.6; }
+#result-bar { display:none; background:#1a7a1a; color:#fff; text-align:center; padding:16px; font-size:14px; flex-shrink:0; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>バーコードスキャン</h1>
+  <button id="close-btn" onclick="closeScanner()">×</button>
+</div>
+<div id="viewfinder">
+  <video id="video" playsinline="" autoplay="" muted=""></video>
+  <div id="overlay">
+    <div id="guide">
+      <div id="guide-text">この枠内にバーコードを入れてください</div>
+    </div>
+  </div>
+</div>
+<div id="status">枠内にバーコードを入れてください（自動読み取り）</div>
+<div id="result-bar"></div>
+
+<script>
+var stream      = null;
+var scanning    = false;
+var animFrame   = null;
+var canvas      = document.createElement('canvas');
+var statusEl    = document.getElementById('status');
+var resultEl    = document.getElementById('result-bar');
+
+function closeScanner() {
+  stopCamera();
+  window.close();
+}
+
+function stopCamera() {
+  scanning = false;
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+  if (stream)    { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+}
+
+function startScanner() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusEl.textContent = 'このブラウザはカメラに対応していません';
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width:  { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  })
+  .then(function(s) {
+    stream = s;
+    var video = document.getElementById('video');
+    video.srcObject = stream;
+    video.play();
+    statusEl.textContent = '枠内にバーコードを入れてください（自動読み取り）';
+    scanning = true;
+
+    var zHints = new Map();
+    zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    var reader = new ZXing.MultiFormatReader();
+    reader.setHints(zHints);
+
+    function scanLoop() {
+      if (!scanning) return;
+      var video = document.getElementById('video');
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        var vw = video.videoWidth;
+        var vh = video.videoHeight;
+        // ガイド枠（幅80%・高さ28%・中央）の範囲だけ解析
+        var cx = Math.floor(vw * 0.10);
+        var cy = Math.floor(vh * 0.36);
+        var cw = Math.floor(vw * 0.80);
+        var ch = Math.floor(vh * 0.28);
+        canvas.width  = cw;
+        canvas.height = ch;
+        canvas.getContext('2d').drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+        try {
+          var lum    = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+          var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+          var result = reader.decode(bitmap);
+          // 読み取り成功
+          scanning = false;
+          var text = result.getText();
+          resultEl.textContent = '✓ 読み取り完了: ' + text;
+          resultEl.style.display = 'block';
+          statusEl.textContent   = 'ウィンドウが自動で閉じます...';
+          // 親ウィンドウに値を送信
+          if (window.opener) {
+            window.opener.postMessage({ type: 'BARCODE_RESULT', value: text }, '*');
+          }
+          setTimeout(function() { closeScanner(); }, 1500);
+          return;
+        } catch(e) {}
+      }
+      animFrame = requestAnimationFrame(scanLoop);
+    }
+
+    video.addEventListener('loadeddata', function() {
+      animFrame = requestAnimationFrame(scanLoop);
+    });
+  })
+  .catch(function(err) {
+    statusEl.innerHTML =
+      'カメラエラー: ' + err.name + '<br>' +
+      'ブラウザの設定でこのサイトのカメラを許可してください';
+  });
+}
+
+window.addEventListener('load', function() {
+  // ZXingロード待ち
+  var tries = 0;
+  function waitZXing() {
+    if (typeof ZXing !== 'undefined') {
+      startScanner();
+    } else if (tries++ < 20) {
+      setTimeout(waitZXing, 300);
+    } else {
+      statusEl.textContent = 'ライブラリの読み込みに失敗しました。ページを再読み込みしてください';
+    }
+  }
+  waitZXing();
+});
+</script>
+
+
+</body></html>
