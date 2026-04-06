@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>バーコードスキャン</title>
-<script src="https://cdn.jsdelivr.net/npm/quagga2@0.7.4/dist/quagga.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#000; display:flex; flex-direction:column; height:100vh; font-family:-apple-system,sans-serif; overflow:hidden; }
@@ -46,7 +46,6 @@ function closeScanner() {
 }
 
 function onResult(text) {
-  // Codabar：先頭1文字・末尾2文字を除去
   var cleaned = text;
   var first = text.charAt(0).toUpperCase();
   var last  = text.charAt(text.length - 1).toUpperCase();
@@ -110,7 +109,6 @@ window.addEventListener('load', function() {
     statusEl.textContent = '枠内にバーコードを入れてください（自動読み取り）';
   });
 
-  // 同じ結果が3回出たら確定（誤読み防止）
   var results = {};
   Quagga.onDetected(function(data) {
     var code = data.codeResult.code;
