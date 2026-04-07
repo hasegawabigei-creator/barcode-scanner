@@ -16,8 +16,11 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
 #overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
 #guide { width:90%; height:20%; border:2px solid #FFD600; border-radius:6px; box-shadow:0 0 0 2000px rgba(0,0,0,.5); position:relative; }
 #guide-text { position:absolute; top:-28px; left:0; right:0; text-align:center; color:#FFD600; font-size:12px; font-weight:500; white-space:nowrap; }
-#status { background:#111; color:#aaa; text-align:center; padding:14px 16px; font-size:13px; flex-shrink:0; line-height:1.6; }
-#result-bar { display:none; background:#1a7a1a; color:#fff; text-align:center; padding:16px; font-size:14px; flex-shrink:0; }
+#bottom { background:#111; flex-shrink:0; padding:14px 16px; display:flex; flex-direction:column; align-items:center; gap:10px; }
+#scan-btn { width:100%; max-width:320px; padding:16px; border:none; border-radius:8px; background:#FFD600; color:#000; font-size:16px; font-weight:700; cursor:pointer; font-family:inherit; }
+#scan-btn:active { opacity:.8; }
+#status { font-size:12px; color:#aaa; text-align:center; }
+#result-bar { display:none; background:#1a7a1a; color:#fff; text-align:center; padding:14px; font-size:14px; width:100%; border-radius:6px; }
 </style>
 </head>
 <body>
@@ -29,30 +32,24 @@ body { background:#000; display:flex; flex-direction:column; height:100vh; font-
   <video id="video" playsinline autoplay muted></video>
   <div id="overlay">
     <div id="guide">
-      <div id="guide-text">バーコードを枠いっぱいに入れてください</div>
+      <div id="guide-text">読み取るコードを枠内に入れてください</div>
     </div>
   </div>
 </div>
-<div id="status">カメラを起動中...</div>
-<div id="result-bar"></div>
+<div id="bottom">
+  <button id="scan-btn" onclick="doScan()">📷 スキャン</button>
+  <div id="status">枠内にコードを入れてスキャンボタンを押してください</div>
+  <div id="result-bar"></div>
+</div>
 
 <script>
-var stream    = null;
-var scanning  = false;
-var animFrame = null;
-var canvas    = document.createElement('canvas');
-var statusEl  = document.getElementById('status');
-var resultEl  = document.getElementById('result-bar');
+var stream   = null;
+var statusEl = document.getElementById('status');
+var resultEl = document.getElementById('result-bar');
 
 function closeScanner() {
-  stopCamera();
+  if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
   window.close();
-}
-
-function stopCamera() {
-  scanning = false;
-  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
-  if (stream)    { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
 }
 
 function onResult(text) {
@@ -65,22 +62,111 @@ function onResult(text) {
       text.length > 3) {
     cleaned = text.slice(1, text.length - 2);
   }
-  stopCamera();
+
   resultEl.textContent = '✓ 読み取り完了: ' + cleaned;
   resultEl.style.display = 'block';
   statusEl.textContent = 'ウィンドウが自動で閉じます...';
+  document.getElementById('scan-btn').disabled = true;
+
   if (window.opener) {
     window.opener.postMessage({ type: 'BARCODE_RESULT', value: cleaned }, '*');
   }
   setTimeout(function() { closeScanner(); }, 1500);
 }
 
-function startScanner() {
+function doScan() {
+  var video = document.getElementById('video');
+  if (!video || video.readyState < video.HAVE_ENOUGH_DATA) {
+    statusEl.textContent = 'カメラが準備できていません。少し待ってから押してください';
+    return;
+  }
+
+  statusEl.textContent = '解析中...';
+  var btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+
+  var vw = video.videoWidth;
+  var vh = video.videoHeight;
+  var canvas = document.createElement('canvas');
+  var ctx    = canvas.getContext('2d');
+
+  var zHints = new Map();
+  zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  zHints.set(ZXing.DecodeHintType.RETURN_CODABAR_START_END, true);
+  zHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+    ZXing.BarcodeFormat.CODABAR,
+    ZXing.BarcodeFormat.CODE_128,
+    ZXing.BarcodeFormat.CODE_39,
+    ZXing.BarcodeFormat.CODE_93,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.UPC_A,
+    ZXing.BarcodeFormat.UPC_E,
+    ZXing.BarcodeFormat.ITF,
+    ZXing.BarcodeFormat.QR_CODE,
+    ZXing.BarcodeFormat.DATA_MATRIX,
+    ZXing.BarcodeFormat.PDF_417,
+    ZXing.BarcodeFormat.AZTEC
+  ]);
+  var reader = new ZXing.MultiFormatReader();
+  reader.setHints(zHints);
+
+  function tryDecode(c) {
+    var lum    = new ZXing.HTMLCanvasElementLuminanceSource(c);
+    var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+    return reader.decode(bitmap);
+  }
+
+  function toGray(ctx, w, h) {
+    var d = ctx.getImageData(0, 0, w, h);
+    for (var i = 0; i < d.data.length; i += 4) {
+      var g = Math.round(0.299*d.data[i] + 0.587*d.data[i+1] + 0.114*d.data[i+2]);
+      d.data[i] = d.data[i+1] = d.data[i+2] = g;
+    }
+    ctx.putImageData(d, 0, 0);
+  }
+
+  var found = false;
+
+  // ① 枠内カラー
+  var cx = Math.floor(vw * 0.05);
+  var cy = Math.floor(vh * 0.40);
+  var cw = Math.floor(vw * 0.90);
+  var ch = Math.floor(vh * 0.20);
+  canvas.width = cw; canvas.height = ch;
+  ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+  try { onResult(tryDecode(canvas).getText()); found = true; } catch(e) {}
+
+  // ② 枠内グレースケール
+  if (!found) {
+    toGray(ctx, cw, ch);
+    try { onResult(tryDecode(canvas).getText()); found = true; } catch(e) {}
+  }
+
+  // ③ 全体カラー
+  if (!found) {
+    canvas.width = vw; canvas.height = vh;
+    ctx.drawImage(video, 0, 0, vw, vh);
+    try { onResult(tryDecode(canvas).getText()); found = true; } catch(e) {}
+  }
+
+  // ④ 全体グレースケール
+  if (!found) {
+    toGray(ctx, vw, vh);
+    try { onResult(tryDecode(canvas).getText()); found = true; } catch(e) {}
+  }
+
+  if (!found) {
+    statusEl.textContent = '読み取れませんでした。コードを枠に合わせて再度押してください';
+    btn.disabled = false;
+  }
+}
+
+function startCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     statusEl.textContent = 'このブラウザはカメラに対応していません';
     return;
   }
-
   navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
   })
@@ -89,81 +175,7 @@ function startScanner() {
     var video = document.getElementById('video');
     video.srcObject = stream;
     video.play();
-    statusEl.textContent = 'バーコードを枠いっぱいに入れてください（自動読み取り）';
-    scanning = true;
-
-    var zHints = new Map();
-    zHints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    zHints.set(ZXing.DecodeHintType.RETURN_CODABAR_START_END, true);
-    zHints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.CODABAR,
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.CODE_93,
-      ZXing.BarcodeFormat.EAN_13,
-      ZXing.BarcodeFormat.EAN_8,
-      ZXing.BarcodeFormat.UPC_A,
-      ZXing.BarcodeFormat.UPC_E,
-      ZXing.BarcodeFormat.ITF,
-      ZXing.BarcodeFormat.QR_CODE,
-      ZXing.BarcodeFormat.DATA_MATRIX,
-      ZXing.BarcodeFormat.PDF_417,
-      ZXing.BarcodeFormat.AZTEC
-    ]);
-    var reader = new ZXing.MultiFormatReader();
-    reader.setHints(zHints);
-
-    function tryDecode(c) {
-      var lum    = new ZXing.HTMLCanvasElementLuminanceSource(c);
-      var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
-      return reader.decode(bitmap);
-    }
-
-    function toGray(ctx, w, h) {
-      var imgData = ctx.getImageData(0, 0, w, h);
-      for (var i = 0; i < imgData.data.length; i += 4) {
-        var g = Math.round(0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
-        imgData.data[i] = imgData.data[i+1] = imgData.data[i+2] = g;
-      }
-      ctx.putImageData(imgData, 0, 0);
-    }
-
-    function scanLoop() {
-      if (!scanning) return;
-      var video = document.getElementById('video');
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        var vw = video.videoWidth;
-        var vh = video.videoHeight;
-        var ctx = canvas.getContext('2d');
-
-        // ① 枠内（幅90%・高さ20%・中央）
-        var cx = Math.floor(vw * 0.05);
-        var cy = Math.floor(vh * 0.40);
-        var cw = Math.floor(vw * 0.90);
-        var ch = Math.floor(vh * 0.20);
-        canvas.width = cw; canvas.height = ch;
-        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
-
-        // ② グレースケール
-        toGray(ctx, cw, ch);
-        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
-
-        // ③ 全体カラー
-        canvas.width = vw; canvas.height = vh;
-        ctx.drawImage(video, 0, 0, vw, vh);
-        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
-
-        // ④ 全体グレースケール
-        toGray(ctx, vw, vh);
-        try { onResult(tryDecode(canvas).getText()); return; } catch(e) {}
-      }
-      animFrame = requestAnimationFrame(scanLoop);
-    }
-
-    video.addEventListener('loadeddata', function() {
-      animFrame = requestAnimationFrame(scanLoop);
-    });
+    statusEl.textContent = '枠内にコードを入れてスキャンボタンを押してください';
   })
   .catch(function(err) {
     statusEl.innerHTML = 'カメラエラー: ' + err.name + '<br>ブラウザの設定でカメラを許可してください';
@@ -174,7 +186,7 @@ window.addEventListener('load', function() {
   var tries = 0;
   function waitZXing() {
     if (typeof ZXing !== 'undefined') {
-      startScanner();
+      startCamera();
     } else if (tries++ < 20) {
       setTimeout(waitZXing, 300);
     } else {
